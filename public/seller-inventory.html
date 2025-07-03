@@ -71,6 +71,7 @@
         if (!seller || seller.role !== 'seller') {
             location.href = 'index.html';
         }
+        const invDate = document.getElementById('invDate');
         document.getElementById('sellerInfo').innerText = `Вы вошли как: ${seller.name}`;
         invDate.value = new Date().toISOString().slice(0, 10);
 
