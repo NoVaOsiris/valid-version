@@ -1,7 +1,8 @@
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
-const sqlite3 = require('sqlite3').verbose();
+const pgSession = require('connect-pg-simple')(session);
+const { Pool } = require('pg');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const path = require('path');
@@ -10,10 +11,13 @@ const Excel = require('exceljs');
 const app = express();
 const PORT = 3000;
 
+// DB connection
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
 // Middleware
 app.use(session({
-    store: new SQLiteStore({ db: 'sessions.sqlite' }),
-    secret: 'pos-secret-key',
+    store: new pgSession({ pool }),
+    secret: process.env.SESSION_SECRET || 'pos-secret-key',
     resave: false,
     saveUninitialized: false,
     cookie: { maxAge: 86400000 }
@@ -23,42 +27,55 @@ app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // DB init
-const db = new sqlite3.Database('sales.db', err => {
-    if (err) console.error('DB error', err);
-});
+(async () => {
+    const initSQL = `
+    CREATE TABLE IF NOT EXISTS sellers (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS products (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        price INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS sales (
+        id SERIAL PRIMARY KEY,
+        seller_id INTEGER REFERENCES sellers(id),
+        product_id INTEGER REFERENCES products(id),
+        quantity INTEGER,
+        sale_time TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS inventory (
+        id SERIAL PRIMARY KEY,
+        seller_id INTEGER REFERENCES sellers(id),
+        product_id INTEGER REFERENCES products(id),
+        date DATE,
+        opening_balance INTEGER,
+        receipt INTEGER,
+        transfer INTEGER,
+        write_off INTEGER,
+        closing_balance INTEGER,
+        UNIQUE(seller_id, product_id, date)
+    );
+    INSERT INTO sellers (name, password, role) VALUES
+        ('mechnikova','1234','seller'),
+        ('borodinka','1234','seller'),
+        ('merkury','1234','seller'),
+        ('pochta','1234','seller'),
+        ('obzhorka','1234','seller'),
+        ('pyshka','1234','seller'),
+        ('klio','1234','seller'),
+        ('admin','admin','admin')
+    ON CONFLICT (name) DO NOTHING;`;
 
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS sellers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    password TEXT,
-    role TEXT
-  )`);
-    db.run(`CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    price INTEGER
-  )`);
-    db.run(`CREATE TABLE IF NOT EXISTS sales (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    seller_id INTEGER,
-    product_id INTEGER,
-    quantity INTEGER,
-    sale_time TEXT
-  )`);
-    db.run(`CREATE TABLE IF NOT EXISTS inventory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    seller_id INTEGER,
-    product_id INTEGER,
-    date TEXT,
-    opening_balance INTEGER,
-    receipt INTEGER,
-    transfer INTEGER,
-    write_off INTEGER,
-    closing_balance INTEGER,
-    UNIQUE(seller_id, product_id, date)
-  )`);
-});
+    try {
+        await pool.query(initSQL);
+    } catch (e) {
+        console.error('DB init error', e);
+    }
+})();
 
 // Role check
 function requireRole(role) {
@@ -72,14 +89,20 @@ function requireRole(role) {
 }
 
 // Auth
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
     const { name, password } = req.body;
-    db.get(`SELECT * FROM sellers WHERE name=? AND password=?`, [name, password], (err, row) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
+    try {
+        const { rows } = await pool.query(
+            'SELECT * FROM sellers WHERE name=$1 AND password=$2',
+            [name, password]
+        );
+        const row = rows[0];
         if (!row) return res.status(401).json({ error: 'Неверные данные' });
         req.session.user = { id: row.id, name: row.name, role: row.role };
         res.json(req.session.user);
-    });
+    } catch (err) {
+        res.status(500).json({ error: 'DB error' });
+    }
 });
 
 app.post('/api/logout', (req, res) => {
@@ -87,85 +110,100 @@ app.post('/api/logout', (req, res) => {
 });
 
 // Products
-app.get('/api/products', requireRole(), (req, res) => {
-    db.all(`SELECT * FROM products ORDER BY name`, (err, rows) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
+app.get('/api/products', requireRole(), async (req, res) => {
+    try {
+        const { rows } = await pool.query('SELECT * FROM products ORDER BY name');
         res.json(rows);
-    });
-});
-
-app.post('/api/products', requireRole('admin'), (req, res) => {
-    const { id, name, price } = req.body;
-    if (id) {
-        db.run(`UPDATE products SET name=?, price=? WHERE id=?`, [name, price, id], err => {
-            if (err) return res.status(500).json({ error: 'DB error' });
-            res.json({ success: true });
-        });
-    } else {
-        db.run(`INSERT INTO products (name, price) VALUES (?,?)`, [name, price], function (err) {
-            if (err) return res.status(500).json({ error: 'DB error' });
-            res.json({ success: true, id: this.lastID });
-        });
+    } catch (err) {
+        res.status(500).json({ error: 'DB error' });
     }
 });
 
-app.delete('/api/products/:id', requireRole('admin'), (req, res) => {
-    db.run(`DELETE FROM products WHERE id=?`, [req.params.id], err => {
-        if (err) return res.status(500).json({ error: 'DB error' });
+app.post('/api/products', requireRole('admin'), async (req, res) => {
+    const { id, name, price } = req.body;
+    try {
+        if (id) {
+            await pool.query('UPDATE products SET name=$1, price=$2 WHERE id=$3', [name, price, id]);
+            res.json({ success: true });
+        } else {
+            const { rows } = await pool.query('INSERT INTO products (name, price) VALUES ($1,$2) RETURNING id', [name, price]);
+            res.json({ success: true, id: rows[0].id });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'DB error' });
+    }
+});
+
+app.delete('/api/products/:id', requireRole('admin'), async (req, res) => {
+    try {
+        await pool.query('DELETE FROM products WHERE id=$1', [req.params.id]);
         res.json({ success: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: 'DB error' });
+    }
 });
 
 // Sales
-app.post('/api/sales', requireRole(), (req, res) => {
+app.post('/api/sales', requireRole(), async (req, res) => {
     const { items } = req.body;
     if (!items || !items.length) return res.status(400).json({ error: 'Нет товаров' });
     const time = new Date().toISOString();
-    const stmt = db.prepare(`INSERT INTO sales (seller_id, product_id, quantity, sale_time) VALUES (?,?,?,?)`);
-    db.serialize(() => {
-        items.forEach(i => stmt.run(req.session.user.id, i.product_id, i.quantity, time));
-        stmt.finalize(err => {
-            if (err) return res.status(500).json({ error: 'DB error' });
-            res.json({ success: true });
-        });
-    });
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const i of items) {
+            await client.query(
+                'INSERT INTO sales (seller_id, product_id, quantity, sale_time) VALUES ($1,$2,$3,$4)',
+                [req.session.user.id, i.product_id, i.quantity, time]
+            );
+        }
+        await client.query('COMMIT');
+        res.json({ success: true });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: 'DB error' });
+    } finally {
+        client.release();
+    }
 });
 
-app.get('/api/sales', requireRole('admin'), (req, res) => {
+app.get('/api/sales', requireRole('admin'), async (req, res) => {
     const { seller_id, date } = req.query;
     let sql = `
-    SELECT s.name AS point, p.name AS product, sa.quantity, p.price,
+    SELECT s.name AS seller, p.name AS product, sa.quantity, p.price,
            (p.price * sa.quantity) AS sum,
-           datetime(sa.sale_time,'localtime') AS time
+           sa.sale_time AT TIME ZONE 'UTC' AT TIME ZONE 'localtime' AS time
     FROM sales sa
     JOIN sellers s ON s.id = sa.seller_id
     JOIN products p ON p.id = sa.product_id`;
     const cond = [], params = [];
-    if (seller_id) { cond.push('sa.seller_id = ?'); params.push(seller_id); }
-    if (date) { cond.push("date(sa.sale_time)=?"); params.push(date); }
+    if (seller_id) { cond.push('sa.seller_id = $' + (params.length + 1)); params.push(seller_id); }
+    if (date) { cond.push('date(sa.sale_time) = $' + (params.length + 1)); params.push(date); }
     if (cond.length) sql += ' WHERE ' + cond.join(' AND ');
     sql += ' ORDER BY sa.sale_time DESC';
-    db.all(sql, params, (err, rows) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
+    try {
+        const { rows } = await pool.query(sql, params);
         res.json(rows);
-    });
+    } catch (err) {
+        res.status(500).json({ error: 'DB error' });
+    }
 });
 
 // Excel: Sales
-app.get('/api/sales-export.xlsx', requireRole('admin'), (req, res) => {
+app.get('/api/sales-export.xlsx', requireRole('admin'), async (req, res) => {
     const date = req.query.date;
     if (!date) return res.status(400).send('Укажите дату');
     const sql = `
     SELECT s.name AS seller, p.name AS product, sa.quantity, p.price,
            (sa.quantity * p.price) AS sum,
-           datetime(sa.sale_time,'localtime') AS time
+           sa.sale_time AT TIME ZONE 'UTC' AT TIME ZONE 'localtime' AS time
     FROM sales sa
     JOIN sellers s ON s.id = sa.seller_id
     JOIN products p ON p.id = sa.product_id
-    WHERE date(sa.sale_time) = ?
+    WHERE date(sa.sale_time) = $1
     ORDER BY sa.sale_time`;
-    db.all(sql, [date], async (err, rows) => {
-        if (err) return res.status(500).send('DB error');
+    try {
+        const { rows } = await pool.query(sql, [date]);
         const wb = new Excel.Workbook();
         const ws = wb.addWorksheet('Sales');
         ws.columns = [
@@ -190,9 +228,11 @@ app.get('/api/sales-export.xlsx', requireRole('admin'), (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename="sales-${date}.xlsx"`);
         await wb.xlsx.write(res);
         res.end();
-    });
+    } catch (err) {
+        res.status(500).send('DB error');
+    }
 });
-app.get('/api/inventory-all.xlsx', requireRole('admin'), (req, res) => {
+app.get('/api/inventory-all.xlsx', requireRole('admin'), async (req, res) => {
     const date = req.query.date;
     if (!date) return res.status(400).send('Укажите дату');
 
@@ -203,12 +243,12 @@ app.get('/api/inventory-all.xlsx', requireRole('admin'), (req, res) => {
     FROM inventory i
     JOIN sellers s ON s.id = i.seller_id
     JOIN products p ON p.id = i.product_id
-    WHERE date = ?
+    WHERE date = $1
     ORDER BY s.name, p.name
   `;
 
-    db.all(sql, [date], async (err, rows) => {
-        if (err) return res.status(500).send('DB error');
+    try {
+        const { rows } = await pool.query(sql, [date]);
 
         const wb = new Excel.Workbook();
         const ws = wb.addWorksheet('Inventory');
@@ -234,11 +274,13 @@ app.get('/api/inventory-all.xlsx', requireRole('admin'), (req, res) => {
 
         await wb.xlsx.write(res);
         res.end();
-    });
+    } catch (err) {
+        res.status(500).send('DB error');
+    }
 });
 
 // Inventory
-app.get('/api/inventory-fill', requireRole(), (req, res) => {
+app.get('/api/inventory-fill', requireRole(), async (req, res) => {
     const seller_id = req.session.user.id;
     const date = req.query.date;
     if (!date) return res.status(400).json({ error: 'Укажите дату' });
@@ -251,47 +293,55 @@ app.get('/api/inventory-fill', requireRole(), (req, res) => {
            COALESCE(i.closing_balance, '') AS closing_balance
     FROM products p
     LEFT JOIN inventory i
-      ON i.product_id = p.id AND i.seller_id = ? AND i.date = ?
+      ON i.product_id = p.id AND i.seller_id = $1 AND i.date = $2
     ORDER BY p.name`;
-    db.all(sql, [seller_id, date], (err, rows) => {
-        if (err) return res.status(500).json({ error: 'DB error' });
+    try {
+        const { rows } = await pool.query(sql, [seller_id, date]);
         res.json(rows);
-    });
+    } catch (err) {
+        res.status(500).json({ error: 'DB error' });
+    }
 });
 
-app.post('/api/inventory', requireRole(), (req, res) => {
+app.post('/api/inventory', requireRole(), async (req, res) => {
     const seller_id = req.session.user.id;
     const { date, rows } = req.body;
     if (!date || !Array.isArray(rows)) return res.status(400).json({ error: 'Неверные данные' });
 
-    const stmt = db.prepare(`
-    INSERT INTO inventory (seller_id, product_id, date, opening_balance, receipt, transfer, write_off, closing_balance)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(seller_id, product_id, date)
-    DO UPDATE SET
-      opening_balance = excluded.opening_balance,
-      receipt = excluded.receipt,
-      transfer = excluded.transfer,
-      write_off = excluded.write_off,
-      closing_balance = excluded.closing_balance
-  `);
-
-    db.serialize(() => {
-        rows.forEach(r => {
-            stmt.run(
-                seller_id, r.product_id, date,
-                r.opening || 0,
-                r.receipt || 0,
-                r.transfer || 0,
-                r.write_off || 0,
-                r.closing || 0
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const r of rows) {
+            await client.query(
+                `INSERT INTO inventory (seller_id, product_id, date, opening_balance, receipt, transfer, write_off, closing_balance)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                 ON CONFLICT(seller_id, product_id, date)
+                 DO UPDATE SET
+                   opening_balance = EXCLUDED.opening_balance,
+                   receipt = EXCLUDED.receipt,
+                   transfer = EXCLUDED.transfer,
+                   write_off = EXCLUDED.write_off,
+                   closing_balance = EXCLUDED.closing_balance`,
+                [
+                    seller_id,
+                    r.product_id,
+                    date,
+                    r.opening || 0,
+                    r.receipt || 0,
+                    r.transfer || 0,
+                    r.write_off || 0,
+                    r.closing || 0
+                ]
             );
-        });
-        stmt.finalize(err => {
-            if (err) return res.status(500).json({ error: 'DB error' });
-            res.json({ success: true });
-        });
-    });
+        }
+        await client.query('COMMIT');
+        res.json({ success: true });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ error: 'DB error' });
+    } finally {
+        client.release();
+    }
 });
 
 // Start server

@@ -93,7 +93,7 @@
                 total += r.sum;
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-              <td>${r.point}</td><td>${r.product}</td><td>${r.quantity}</td>
+              <td>${r.seller}</td><td>${r.product}</td><td>${r.quantity}</td>
               <td>${r.price}</td><td>${r.sum}</td><td>${new Date(r.time).toLocaleString()}</td>
             `;
                 tbody.appendChild(tr);
