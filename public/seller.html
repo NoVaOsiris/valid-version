@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>Продавец — Пирожки</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        h2, h3 {
+            margin-top: 1.5em;
+        }
+
+        button {
+            margin: 5px;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 6px 10px;
+            text-align: center;
+        }
+
+        #productsList button {
+            display: inline-block;
+            margin: 4px;
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Продажа товаров</h2>
+        <div id="sellerInfo"></div>
+
+        <div id="productsList"></div>
+
+        <h3>Корзина:</h3>
+        <table id="cartTable">
+            <thead>
+                <tr>
+                    <th>Товар</th>
+                    <th>Цена</th>
+                    <th>Кол-во</th>
+                    <th>Сумма</th>
+                    <th>Удалить</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+
+        <div style="margin-top: 10px;">
+            <strong>Итого: </strong><span id="totalPrice">0</span> ₽
+        </div>
+
+        <div style="margin-top: 1em;">
+            <button id="submitSale">Оформить продажу</button>
+            <button id="openInventory">Учёт остатков</button>
+        </div>
+
+        <div id="message" style="margin-top: 1em; font-weight: bold;"></div>
+    </div>
+
+    <script>
+        const seller = JSON.parse(localStorage.getItem('seller'));
+        if (!seller || seller.role !== 'seller') {
+            window.location.href = 'index.html';
+        } else {
+            document.getElementById('sellerInfo').innerText = `Вы вошли как: ${seller.name}`;
+        }
+
+        let products = [];
+        let cart = [];
+
+        function updateCartTable() {
+            const tbody = document.querySelector('#cartTable tbody');
+            tbody.innerHTML = '';
+            let total = 0;
+
+            cart.forEach((item, idx) => {
+                const sum = item.price * item.quantity;
+                total += sum;
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+              <td>${item.name}</td>
+              <td>${item.price}</td>
+              <td>${item.quantity}</td>
+              <td>${sum}</td>
+              <td><button data-idx="${idx}">X</button></td>
+            `;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('totalPrice').innerText = total;
+            tbody.querySelectorAll('button').forEach(btn => {
+                btn.onclick = e => {
+                    const idx = +e.target.dataset.idx;
+                    cart.splice(idx, 1);
+                    updateCartTable();
+                };
+            });
+        }
+
+        function loadProducts() {
+            fetch('/api/products', { credentials: 'include' })
+                .then(res => res.json())
+                .then(data => {
+                    products = data.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+                    const list = document.getElementById('productsList');
+                    list.innerHTML = '';
+                    products.forEach(p => {
+                        const btn = document.createElement('button');
+                        btn.textContent = `${p.name} (${p.price}₽)`;
+                        btn.onclick = () => {
+                            const exist = cart.find(x => x.id === p.id);
+                            if (exist) exist.quantity++;
+                            else cart.push({ id: p.id, name: p.name, price: p.price, quantity: 1 });
+                            updateCartTable();
+                        };
+                        list.appendChild(btn);
+                    });
+                });
+        }
+
+        document.getElementById('submitSale').onclick = () => {
+            if (cart.length === 0) return alert('Добавьте товары в корзину');
+            const items = cart.map(i => ({ product_id: i.id, quantity: i.quantity }));
+            fetch('/api/sales', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items })
+            })
+                .then(res => res.json())
+                .then(resp => {
+                    const msg = document.getElementById('message');
+                    if (resp.success) {
+                        msg.innerText = '✅ Продажа оформлена!';
+                        msg.style.color = 'green';
+                        cart = [];
+                        updateCartTable();
+                    } else {
+                        msg.innerText = '❌ Ошибка: ' + (resp.error || 'неизвестно');
+                        msg.style.color = 'red';
+                    }
+                })
+                .catch(err => {
+                    console.error(err);
+                    document.getElementById('message').innerText = 'Ошибка подключения к серверу';
+                });
+        };
+
+        document.getElementById('openInventory').onclick = () => {
+            window.location.href = 'seller-inventory.html';
+        };
+
+        loadProducts();
+        updateCartTable();
+    </script>
+</body>
+</html>

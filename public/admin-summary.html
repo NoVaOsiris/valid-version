@@ -1,0 +1,91 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Сводка по кассирам</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 1em;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 6px 10px;
+            text-align: center;
+        }
+
+        th {
+            background-color: #f0f0f0;
+        }
+
+        .actions {
+            margin-top: 1em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Ежедневная сводка по кассирам</h1>
+
+    <div class="actions">
+        <button id="refresh">Обновить данные</button>
+        <a id="download" href="/api/export.xlsx" target="_blank">Скачать Excel</a>
+    </div>
+
+    <table id="report">
+        <thead>
+            <tr>
+                <th>Продавец</th>
+                <th>Нач. остаток</th>
+                <th>Поступления</th>
+                <th>Продажи</th>
+                <th>Чистый остаток</th>
+                <th>Кон. остаток</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        async function loadReport() {
+            try {
+                const res = await fetch('/api/daily-summary', {
+                    credentials: 'include'
+                });
+                if (!res.ok) {
+                    alert('Ошибка загрузки данных');
+                    return;
+                }
+                const data = await res.json();
+                const tbody = document.querySelector('#report tbody');
+                tbody.innerHTML = '';
+
+                data.forEach(row => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                <td>${row.seller}</td>
+                <td>${row.start_balance}</td>
+                <td>${row.total_in}</td>
+                <td>${row.total_out}</td>
+                <td>${row.net_balance}</td>
+                <td>${row.end_balance}</td>
+              `;
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                console.error(err);
+                alert('Не удалось получить сводку');
+            }
+        }
+
+        document.getElementById('refresh').onclick = loadReport;
+        window.addEventListener('load', loadReport);
+    </script>
+</body>
+</html>

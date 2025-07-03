@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Админка</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        h2, h3 {
+            margin-top: 1.5em;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 6px 10px;
+            text-align: center;
+        }
+
+        th {
+            background: #eee;
+        }
+
+        input[type="date"], button {
+            margin: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Добро пожаловать, админ!</h2>
+    <div id="adminInfo"></div>
+
+    <h3>📦 Список товаров</h3>
+    <button id="refreshProducts">Обновить</button>
+    <table>
+        <thead><tr><th>ID</th><th>Название</th><th>Цена</th></tr></thead>
+        <tbody id="productsBody"></tbody>
+    </table>
+
+    <h3>💰 Продажи</h3>
+    <label>Дата: <input type="date" id="salesDate" /></label>
+    <button id="loadSales">Загрузить</button>
+    <button id="exportSales">Скачать Excel</button>
+    <table>
+        <thead><tr><th>Продавец</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th><th>Время</th></tr></thead>
+        <tbody id="salesBody"></tbody>
+    </table>
+    <div id="salesTotal" style="margin-top: 10px; font-weight: bold;">Итого: 0 ₽</div>
+
+    <h3>📊 Остатки</h3>
+    <label>Дата: <input type="date" id="invDate" /></label>
+    <button id="downloadInv">Скачать Excel</button>
+
+    <script>
+        const admin = JSON.parse(localStorage.getItem('seller'));
+        if (!admin || admin.role !== 'admin') {
+            location.href = 'index.html';
+        }
+        document.getElementById('adminInfo').innerText = `Вы вошли как: ${admin.name}`;
+
+        // Загрузка товаров
+        async function loadProducts() {
+            const res = await fetch('/api/products', { credentials: 'include' });
+            const data = await res.json();
+            const tbody = document.getElementById('productsBody');
+            tbody.innerHTML = '';
+            data.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${p.id}</td><td>${p.name}</td><td>${p.price}</td>`;
+                tbody.appendChild(tr);
+            });
+        }
+        document.getElementById('refreshProducts').onclick = loadProducts;
+
+        // Загрузка продаж
+        document.getElementById('loadSales').onclick = async () => {
+            const date = document.getElementById('salesDate').value;
+            if (!date) return alert('Укажите дату!');
+            const res = await fetch('/api/sales?date=' + date, { credentials: 'include' });
+            const data = await res.json();
+            const tbody = document.getElementById('salesBody');
+            tbody.innerHTML = '';
+            let total = 0;
+            data.forEach(r => {
+                total += r.sum;
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+              <td>${r.point}</td><td>${r.product}</td><td>${r.quantity}</td>
+              <td>${r.price}</td><td>${r.sum}</td><td>${new Date(r.time).toLocaleString()}</td>
+            `;
+                tbody.appendChild(tr);
+            });
+            document.getElementById('salesTotal').innerText = `Итого: ${total} ₽`;
+        };
+
+        // Excel-экспорт продаж
+        document.getElementById('exportSales').onclick = () => {
+            const date = document.getElementById('salesDate').value;
+            if (!date) return alert('Укажите дату!');
+            window.location.href = '/api/sales-export.xlsx?date=' + date;
+        };
+
+        // Excel-экспорт остатков
+        document.getElementById('downloadInv').onclick = () => {
+            const date = document.getElementById('invDate').value;
+            if (!date) return alert('Укажите дату!');
+            window.location.href = '/api/inventory-all.xlsx?date=' + date;
+        };
+
+        // Инициализация
+        window.addEventListener('load', () => {
+            const today = new Date().toISOString().slice(0, 10);
+            document.getElementById('salesDate').value = today;
+            document.getElementById('invDate').value = today;
+            loadProducts();
+        });
+    </script>
+</body>
+</html>

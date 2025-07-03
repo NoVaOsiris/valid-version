@@ -1,0 +1,133 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <title>Учёт остатков</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        h2 {
+            margin-bottom: 0.5em;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 6px 8px;
+            text-align: center;
+        }
+
+        th {
+            background: #f0f0f0;
+        }
+
+        input[type="number"] {
+            width: 80px;
+            text-align: right;
+        }
+
+        input[type="date"], button {
+            margin: 6px;
+        }
+    </style>
+</head>
+<body>
+    <h2>Учёт остатков продавца</h2>
+    <div id="sellerInfo"></div>
+
+    <label>
+        Дата:
+        <input type="date" id="invDate" />
+    </label>
+    <button id="loadBtn">Загрузить</button>
+    <button id="saveBtn">Сохранить</button>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Товар</th>
+                <th>Нач. ост.</th>
+                <th>Поступл.</th>
+                <th>Перемещение</th>
+                <th>Списание</th>
+                <th>Кон. ост.</th>
+            </tr>
+        </thead>
+        <tbody id="invBody"></tbody>
+    </table>
+
+    <div id="message" style="margin-top: 10px; font-weight: bold;"></div>
+
+    <script>
+        const seller = JSON.parse(localStorage.getItem('seller'));
+        if (!seller || seller.role !== 'seller') {
+            location.href = 'index.html';
+        }
+        document.getElementById('sellerInfo').innerText = `Вы вошли как: ${seller.name}`;
+        invDate.value = new Date().toISOString().slice(0, 10);
+
+        async function loadInventory() {
+            const date = invDate.value;
+            const res = await fetch('/api/inventory-fill?date=' + date, { credentials: 'include' });
+            const rows = await res.json();
+            const tbody = document.getElementById('invBody');
+            tbody.innerHTML = '';
+            rows.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+              <td>${r.name}</td>
+              <td><input type="number" name="opening" data-id="${r.id}" value="${r.opening_balance ?? ''}"></td>
+              <td><input type="number" name="receipt" data-id="${r.id}" value="${r.receipt ?? ''}"></td>
+              <td><input type="number" name="transfer" data-id="${r.id}" value="${r.transfer ?? ''}"></td>
+              <td><input type="number" name="write_off" data-id="${r.id}" value="${r.write_off ?? ''}"></td>
+              <td><input type="number" name="closing" data-id="${r.id}" value="${r.closing_balance ?? ''}"></td>
+            `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function saveInventory() {
+            const date = invDate.value;
+            const inputs = document.querySelectorAll('#invBody input');
+            const grouped = {};
+
+            inputs.forEach(input => {
+                const id = input.dataset.id;
+                if (!grouped[id]) grouped[id] = { product_id: +id };
+                grouped[id][input.name] = Number(input.value) || 0;
+            });
+
+            const data = Object.values(grouped);
+
+            const res = await fetch('/api/inventory', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date, rows: data })
+            });
+
+            const result = await res.json();
+            const msg = document.getElementById('message');
+            if (result.success) {
+                msg.innerText = '✅ Остатки сохранены';
+                msg.style.color = 'green';
+            } else {
+                msg.innerText = '❌ Ошибка: ' + (result.error || 'неизвестна');
+                msg.style.color = 'red';
+            }
+        }
+
+        loadBtn.onclick = loadInventory;
+        saveBtn.onclick = saveInventory;
+        window.addEventListener('load', loadInventory);
+    </script>
+</body>
+</html>
