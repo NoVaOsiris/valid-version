@@ -39,9 +39,14 @@
     <div id="adminInfo"></div>
 
     <h3>📦 Список товаров</h3>
-    <button id="refreshProducts">Обновить</button>
+   <div>
+        <button id="refreshProducts">Обновить</button>
+        <input id="prodName" placeholder="Название" />
+        <input id="prodPrice" type="number" placeholder="Цена" />
+        <button id="addProduct">Добавить</button>
+    </div>
     <table>
-        <thead><tr><th>ID</th><th>Название</th><th>Цена</th></tr></thead>
+     <thead><tr><th>ID</th><th>Название</th><th>Цена</th><th>Действия</th></tr></thead>
         <tbody id="productsBody"></tbody>
     </table>
 
@@ -74,11 +79,63 @@
             tbody.innerHTML = '';
             data.forEach(p => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${p.id}</td><td>${p.name}</td><td>${p.price}</td>`;
+              tr.innerHTML = `<td>${p.id}</td><td>${p.name}</td><td>${p.price}</td>
+                    <td>
+                        <button data-id="${p.id}" class="edit">✏️</button>
+                        <button data-id="${p.id}" class="del">🗑️</button>
+                    </td>`;
                 tbody.appendChild(tr);
+            });
+            tbody.querySelectorAll('.edit').forEach(btn => {
+                btn.onclick = () => editProduct(btn.dataset.id);
+            });
+            tbody.querySelectorAll('.del').forEach(btn => {
+                btn.onclick = () => deleteProduct(btn.dataset.id);
             });
         }
         document.getElementById('refreshProducts').onclick = loadProducts;
+         document.getElementById('addProduct').onclick = addProduct;
+
+        async function addProduct() {
+            const name = document.getElementById('prodName').value.trim();
+            const price = +document.getElementById('prodPrice').value;
+            if (!name || !price) return alert('Введите название и цену');
+            await fetch('/api/products', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, price })
+            });
+            document.getElementById('prodName').value = '';
+            document.getElementById('prodPrice').value = '';
+            loadProducts();
+        }
+
+        async function editProduct(id) {
+            const row = document.querySelector(`button.edit[data-id="${id}"]`).closest('tr');
+            const currentName = row.children[1].innerText;
+            const currentPrice = row.children[2].innerText;
+            const name = prompt('Название', currentName);
+            if (name === null) return; // cancel
+            const price = prompt('Цена', currentPrice);
+            if (price === null) return;
+            await fetch('/api/products', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, name, price: +price })
+            });
+            loadProducts();
+        }
+
+        async function deleteProduct(id) {
+            if (!confirm('Удалить товар?')) return;
+            await fetch('/api/products/' + id, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            loadProducts();
+        }
 
         // Загрузка продаж
         document.getElementById('loadSales').onclick = async () => {
